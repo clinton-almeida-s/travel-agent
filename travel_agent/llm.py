@@ -34,6 +34,25 @@ def chat(messages: list[dict], tools: list[dict]) -> dict:
 
 # ── Gemini (google-genai) ──────────────────────────────────────────────────
 
+def _function_call_part(name: str, args: dict, thought_signature=None):
+    """Build a model FunctionCall part, preserving the thought signature.
+
+    Thinking-capable Gemini models reject a request when a function call
+    replayed from history lacks the thought_signature the model originally
+    returned with it (400 INVALID_ARGUMENT). We capture the signature from
+    each response and send it back here.
+    """
+    from google.genai import types
+
+    fc = types.FunctionCall(name=name, args=args or {})
+    if thought_signature:
+        try:
+            fc.thought_signature = thought_signature
+        except Exception:
+            pass  # older google-genai without the field
+    return types.Part(function_call=fc)
+
+
 def _gemini_chat(messages: list[dict], tools: list[dict]) -> dict:
     try:
         from google import genai
@@ -56,7 +75,9 @@ def _gemini_chat(messages: list[dict], tools: list[dict]) -> dict:
             if m.get("content"):
                 parts.append(types.Part.from_text(text=m["content"]))
             for tc in m.get("tool_calls", []):
-                parts.append(types.Part.from_function_call(name=tc["name"], args=tc["arguments"]))
+                parts.append(
+                    _function_call_part(tc["name"], tc["arguments"], tc.get("thought_signature"))
+                )
             contents.append(types.Content(role="model", parts=parts))
         elif role == "tool":
             try:
@@ -91,7 +112,14 @@ def _gemini_chat(messages: list[dict], tools: list[dict]) -> dict:
             fc = getattr(part, "function_call", None)
             if fc:
                 args = dict(fc.args) if fc.args else {}
-                tool_calls.append({"id": f"gemini-{fc.name}-{len(tool_calls)}", "name": fc.name, "arguments": args})
+                tool_calls.append(
+                    {
+                        "id": f"gemini-{fc.name}-{len(tool_calls)}",
+                        "name": fc.name,
+                        "arguments": args,
+                        "thought_signature": getattr(fc, "thought_signature", None),
+                    }
+                )
     return {
         "role": "assistant",
         "content": "".join(text_parts) or None,
