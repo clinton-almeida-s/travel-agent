@@ -58,6 +58,25 @@ cp .env.example .env   # then fill in keys (see below)
 python -m travel_agent
 ```
 
+On Windows (PowerShell):
+
+```powershell
+git clone https://github.com/clinton-almeida-s/travel-agent
+cd travel-agent
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env   # then fill in keys (see below)
+python -m travel_agent
+```
+
+> If PowerShell refuses to run the activate script, run once:
+> `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+>
+> ⚠️ Never commit your `.env` file or paste real keys into any committed
+> file — `.env` is gitignored for a reason. If a key ever lands in a commit,
+> revoke it immediately and generate a new one.
+
 ## Where to get free API keys
 
 | Key | Where | Free tier |
@@ -115,6 +134,16 @@ Budget level? … [mid-range]: mid-range
   prepare and confirm, but live ticketing is intentionally not implemented —
   complete payment with the airline/hotel. This is a safety decision, not a bug.
 - No web UI, no database — CLI v1. Conversation history lives only in the session.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `401 UNAUTHENTICATED` from Gemini | Key missing/invalid — fresh key from https://aistudio.google.com/apikey, set as `GEMINI_API_KEY=...` with no quotes or spaces |
+| `404 ... model ... is no longer available` | Model retired — `git pull` for the updated default, or set `GEMINI_MODEL` to a current one |
+| `google-genai is not installed` | You skipped the install step — run `pip install -r requirements.txt` |
+| `503 UNAVAILABLE` / high demand | Transient Google-side load — the agent retries automatically; just run again |
+| Flight search says "unavailable" | `DUFFEL_API_KEY` not set — the rest of the plan still works; add the key later |
 
 ## Project layout
 
