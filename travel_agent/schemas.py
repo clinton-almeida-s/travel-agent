@@ -15,7 +15,7 @@ TOOLS: list[dict] = [
         "description": (
             "Search for flight offers between two airports on given dates. "
             "Returns live offers with airline, times, duration, stops and price. "
-            "Prices from the Amadeus test environment are indicative — tell the "
+            "Prices from Duffel test mode are illustrative — tell the "
             "user to verify before booking."
         ),
         "parameters": {

@@ -47,10 +47,11 @@ class Settings:
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     groq_model: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-    # Amadeus (flights + hotels)
-    amadeus_client_id: str = os.getenv("AMADEUS_CLIENT_ID", "")
-    amadeus_client_secret: str = os.getenv("AMADEUS_CLIENT_SECRET", "")
-    amadeus_env: str = os.getenv("AMADEUS_ENV", "test").lower()  # test | prod
+    # Flights: Duffel (free test mode, no card) — https://duffel.com
+    duffel_api_key: str = os.getenv("DUFFEL_API_KEY", "")
+
+    # Hotels: LiteAPI (free sandbox key, no card) — https://dashboard.liteapi.travel
+    liteapi_api_key: str = os.getenv("LITEAPI_API_KEY", "")
 
     # Weather / activities
     openweather_api_key: str = os.getenv("OPENWEATHER_API_KEY", "")
@@ -77,8 +78,10 @@ def is_configured(service: str) -> bool:
         if s.llm_provider == "groq":
             return bool(s.groq_api_key)
         return False
-    if service in ("flights", "hotels"):
-        return bool(s.amadeus_client_id and s.amadeus_client_secret)
+    if service == "flights":
+        return bool(s.duffel_api_key)
+    if service == "hotels":
+        return bool(s.liteapi_api_key)
     if service == "weather":
         return bool(s.openweather_api_key)
     if service in ("activities", "geocode"):

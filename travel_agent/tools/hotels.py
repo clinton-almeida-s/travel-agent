@@ -1,43 +1,85 @@
-"""Hotels via Amadeus Hotel Search v3 (hotel list by geocode + hotel offers).
+"""Hotels via LiteAPI (free sandbox key, no card required).
+
+Flow: geocode the location -> GET /data/hotels (static list by coordinates)
+-> POST /hotels/rates (live rates for those hotel ids).
 
 Never invent prices or availability: on missing credentials or API errors
 these functions return {"error", "hint"} dicts.
 """
 from __future__ import annotations
 
+import math
+
+import requests
+
 from ..config import settings
 from .geocode import geocode
 
+_BASE = "https://api.liteapi.travel/v3.0"
 
-def _client():
-    if not settings.amadeus_client_id or not settings.amadeus_client_secret:
-        raise RuntimeError("Amadeus credentials missing")
-    from amadeus import Client
-
-    hostname = "production" if settings.amadeus_env == "prod" else "test"
-    return Client(
-        client_id=settings.amadeus_client_id,
-        client_secret=settings.amadeus_client_secret,
-        hostname=hostname,
-    )
+# LiteAPI requires a guest nationality (ISO-2) for pricing. The agent does
+# not collect nationality, so default to the docs' canonical example.
+_GUEST_NATIONALITY = "US"
 
 
-def _summarize_hotel(hotel: dict, offers: list[dict]) -> dict:
-    best = None
-    if offers:
-        best = min(offers, key=lambda o: float(o.get("price", {}).get("total", "inf") or "inf"))
-    best_price = (best or {}).get("price", {}) if best else {}
+def _headers() -> dict:
     return {
-        "id": hotel.get("hotelId"),
-        "name": hotel.get("name"),
-        "rating": hotel.get("rating"),
-        "city": (hotel.get("address") or {}).get("cityName"),
-        "distance_km": (hotel.get("distance") or {}).get("value"),
-        "amenities": hotel.get("amenities", []),
-        "best_price_total": best_price.get("total"),
-        "currency": best_price.get("currency"),
-        "room_type": ((best or {}).get("room") or {}).get("typeEstimated", {}).get("category"),
+        "X-API-Key": settings.liteapi_api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
     }
+
+
+def _api_error(resp: requests.Response, what: str) -> dict:
+    if resp.status_code == 401:
+        return {
+            "error": "LiteAPI rejected the API key (401).",
+            "hint": "Check LITEAPI_API_KEY in .env — sandbox keys start with sand_.",
+        }
+    return {
+        "error": f"LiteAPI {what} failed (HTTP {resp.status_code}): {resp.text[:200]}",
+        "hint": "Retry shortly.",
+    }
+
+
+def _data_list(resp: requests.Response) -> list:
+    """Unwrap LiteAPI's {"data": [...]} envelope (or a bare list)."""
+    payload = resp.json()
+    if isinstance(payload, dict):
+        inner = payload.get("data", [])
+        return inner if isinstance(inner, list) else []
+    return payload if isinstance(payload, list) else []
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float | None:
+    try:
+        r = 6371.0
+        p1, p2 = math.radians(lat1), math.radians(lat2)
+        dp = math.radians(lat2 - lat1)
+        dl = math.radians(lon2 - lon1)
+        a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        return round(2 * r * math.asin(math.sqrt(a)), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cheapest_rate(entry: dict) -> dict | None:
+    """Cheapest bookable rate across all room types in a rates entry."""
+    best = None
+    for room in entry.get("roomTypes", []) or []:
+        for rate in room.get("rates", []) or []:
+            try:
+                price = float(rate.get("price"))
+            except (TypeError, ValueError):
+                continue
+            if best is None or price < best["price"]:
+                best = {
+                    "price": price,
+                    "room": room.get("name"),
+                    "board": rate.get("boardType") or rate.get("boardCode"),
+                    "offer_id": room.get("offerId"),
+                }
+    return best
 
 
 def search_hotels(
@@ -52,106 +94,135 @@ def search_hotels(
     max_results: int = 5,
 ) -> dict:
     """Search live hotel offers near a location."""
-    if not settings.amadeus_client_id or not settings.amadeus_client_secret:
+    if not settings.liteapi_api_key:
         return {
-            "error": "Hotel search unavailable: AMADEUS_CLIENT_ID / AMADEUS_CLIENT_SECRET not set.",
-            "hint": "Get free test credentials at https://developers.amadeus.com and add them to .env.",
+            "error": "Hotel search unavailable: LITEAPI_API_KEY not set.",
+            "hint": (
+                "Sign up free at https://dashboard.liteapi.travel (no card), "
+                "copy the sandbox key from Profile, and add it to .env."
+            ),
         }
     geo = geocode(location)
     if "error" in geo:
         return {"error": f"Hotel search failed: {geo['error']}", "hint": geo.get("hint", "")}
-    try:
-        from amadeus import ResponseError
 
-        amadeus = _client()
-        try:
-            hotel_list = amadeus.reference_data.locations.hotels.by_geocode.get(
-                latitude=geo["lat"], longitude=geo["lon"], radius=20, radiusUnit="KM"
-            )
-        except ResponseError as exc:
-            return {"error": f"Hotel list lookup failed: {exc}", "hint": "Retry shortly."}
-        hotels = (hotel_list.data or [])[: max(1, min(int(max_results), 20))]
-        if not hotels:
-            return {"location": location, "hotels": [], "note": "No hotels found near this location."}
-        hotel_ids = ",".join(h["hotelId"] for h in hotels if h.get("hotelId"))
-        offer_params: dict = {
-            "hotelIds": hotel_ids,
-            "checkInDate": check_in,
-            "checkOutDate": check_out,
-            "adults": max(int(guests), 1),
-            "currency": (currency or "USD").upper(),
-        }
-        if price_min is not None or price_max is not None:
-            lo = f"{price_min}" if price_min is not None else ""
-            hi = f"{price_max}" if price_max is not None else ""
-            offer_params["priceRange"] = f"{lo}-{hi}"
-        if amenities:
-            offer_params["amenities"] = ",".join(a.upper() for a in amenities)
-        try:
-            offers_resp = amadeus.shopping.hotel_offers_search.get(**offer_params)
-        except ResponseError as exc:
-            return {"error": f"Hotel offers lookup failed: {exc}", "hint": "Retry shortly."}
-        offers_by_hotel: dict[str, list[dict]] = {}
-        for entry in offers_resp.data or []:
-            hid = (entry.get("hotel") or {}).get("hotelId")
-            if hid:
-                offers_by_hotel.setdefault(hid, []).extend(entry.get("offers") or [])
-        results = [_summarize_hotel(h, offers_by_hotel.get(h.get("hotelId"), [])) for h in hotels]
-        out: dict = {
-            "location": location,
-            "check_in": check_in,
-            "check_out": check_out,
-            "hotels": results,
-        }
-        if settings.amadeus_env != "prod":
-            out["disclaimer"] = (
-                "Prices are from the Amadeus TEST environment and are indicative only — "
-                "verify live pricing before booking."
-            )
-        return out
+    # 1. Static hotel list around the coordinates (radius in meters).
+    try:
+        resp = requests.get(
+            f"{_BASE}/data/hotels",
+            params={
+                "latitude": geo["lat"],
+                "longitude": geo["lon"],
+                "radius": 20000,
+                "limit": max(1, min(int(max_results) * 4, 40)),
+            },
+            headers=_headers(),
+            timeout=30,
+        )
     except Exception as exc:
-        return {"error": f"Hotel search failed: {exc}", "hint": "Retry, or check credentials."}
+        return {"error": f"Hotel list lookup failed: {exc}", "hint": "Retry shortly."}
+    if resp.status_code >= 400:
+        return _api_error(resp, "hotel list")
+    hotels = _data_list(resp)
+    if not hotels:
+        return {"location": location, "hotels": [], "note": "No hotels found near this location."}
+    by_id = {h.get("id"): h for h in hotels if h.get("id")}
+    hotel_ids = list(by_id)[:20]
+
+    # 2. Live rates for those hotels.
+    body = {
+        "hotelIds": hotel_ids,
+        "checkin": check_in,
+        "checkout": check_out,
+        "currency": (currency or "USD").upper(),
+        "guestNationality": _GUEST_NATIONALITY,
+        "occupancies": [{"adults": max(int(guests), 1)}],
+    }
+    try:
+        resp = requests.post(
+            f"{_BASE}/hotels/rates", json=body, headers=_headers(), timeout=45
+        )
+    except Exception as exc:
+        return {"error": f"Hotel rates lookup failed: {exc}", "hint": "Retry shortly."}
+    if resp.status_code >= 400:
+        return _api_error(resp, "rates")
+
+    results = []
+    for entry in _data_list(resp):
+        hid = entry.get("hotelId")
+        static = by_id.get(hid, {})
+        best = _cheapest_rate(entry)
+        if best is None:
+            continue
+        if price_min is not None and best["price"] < price_min:
+            continue
+        if price_max is not None and best["price"] > price_max:
+            continue
+        results.append(
+            {
+                "id": hid,
+                "name": entry.get("name") or static.get("name"),
+                "rating": static.get("stars") or entry.get("stars"),
+                "city": static.get("city") or entry.get("city"),
+                "distance_km": _haversine_km(
+                    geo["lat"], geo["lon"], static.get("latitude"), static.get("longitude")
+                ),
+                "amenities": static.get("facilities") or static.get("amenities") or [],
+                "best_price_total": best["price"],
+                "currency": (currency or "USD").upper(),
+                "room_type": best["room"],
+            }
+        )
+    results.sort(key=lambda h: (h["best_price_total"] is None, h["best_price_total"] or 0))
+    results = results[: max(1, min(int(max_results), 20))]
+    out: dict = {
+        "location": location,
+        "check_in": check_in,
+        "check_out": check_out,
+        "hotels": results,
+    }
+    out["disclaimer"] = (
+        "LiteAPI SANDBOX: rates are illustrative test inventory — "
+        "verify live pricing before booking."
+    )
+    if not results:
+        out["note"] = "No bookable rates returned for these dates."
+    return out
 
 
 def get_hotel_details(hotel_id: str) -> dict:
-    """Full details + current offers for one hotel."""
-    if not settings.amadeus_client_id or not settings.amadeus_client_secret:
+    """Full static details for one hotel (description, amenities, location)."""
+    if not settings.liteapi_api_key:
         return {
-            "error": "Hotel details unavailable: Amadeus credentials not set.",
-            "hint": "Get free test credentials at https://developers.amadeus.com.",
+            "error": "Hotel details unavailable: LITEAPI_API_KEY not set.",
+            "hint": "Sign up free at https://dashboard.liteapi.travel and add the sandbox key to .env.",
         }
     try:
-        from amadeus import ResponseError
-
-        amadeus = _client()
-        try:
-            resp = amadeus.shopping.hotel_offers_search.get(hotelIds=hotel_id)
-        except ResponseError as exc:
-            return {"error": f"Hotel details lookup failed: {exc}", "hint": "Check the hotel id."}
-        entries = resp.data or []
-        if not entries:
-            return {"error": f"No details found for hotel '{hotel_id}'.", "hint": "Use an id from search_hotels."}
-        entry = entries[0]
-        hotel = entry.get("hotel", {})
-        offers = []
-        for o in entry.get("offers", [])[:5]:
-            offers.append(
-                {
-                    "id": o.get("id"),
-                    "price_total": (o.get("price") or {}).get("total"),
-                    "currency": (o.get("price") or {}).get("currency"),
-                    "room": (o.get("room") or {}).get("description", {}).get("text"),
-                    "policies": o.get("policies", {}),
-                }
-            )
-        return {
-            "id": hotel.get("hotelId"),
-            "name": hotel.get("name"),
-            "description": hotel.get("description", {}).get("text") if isinstance(hotel.get("description"), dict) else hotel.get("description"),
-            "rating": hotel.get("rating"),
-            "address": hotel.get("address"),
-            "amenities": hotel.get("amenities", []),
-            "offers": offers,
-        }
+        resp = requests.get(
+            f"{_BASE}/data/hotels",
+            params={"hotelIds": hotel_id},
+            headers=_headers(),
+            timeout=30,
+        )
     except Exception as exc:
-        return {"error": f"Hotel details failed: {exc}", "hint": "Retry shortly."}
+        return {"error": f"Hotel details lookup failed: {exc}", "hint": "Retry shortly."}
+    if resp.status_code >= 400:
+        return _api_error(resp, "hotel details")
+    items = _data_list(resp)
+    if not items:
+        return {
+            "error": f"No details found for hotel '{hotel_id}'.",
+            "hint": "Use an id from search_hotels.",
+        }
+    h = items[0]
+    return {
+        "id": h.get("id"),
+        "name": h.get("name"),
+        "description": h.get("hotelDescription"),
+        "rating": h.get("stars"),
+        "address": ", ".join(
+            x for x in [h.get("address"), h.get("city"), h.get("zip"), h.get("country")] if x
+        ),
+        "amenities": h.get("facilities") or h.get("amenities") or [],
+        "photo": h.get("main_photo"),
+    }

@@ -2,9 +2,9 @@
 
 book_flight / book_hotel NEVER complete a booking unless ``confirmed=True``.
 Without confirmation they return a review summary for the user. Even with
-confirmation, live ticketing only runs when AMADEUS_ENV=prod AND
-ENABLE_LIVE_BOOKING=true; otherwise a prepared "ready to ticket" summary is
-returned. Confirmation numbers are never fabricated.
+confirmation, live ticketing only runs when ENABLE_LIVE_BOOKING=true;
+otherwise a prepared "ready to ticket" summary is returned. Confirmation
+numbers are never fabricated.
 """
 from __future__ import annotations
 
@@ -46,14 +46,14 @@ def book_flight(
         return _confirmation_summary(
             "flight", selected_flight, {"passengers": passenger_details, "payment_method_present": True}
         )
-    if not (settings.amadeus_env == "prod" and settings.enable_live_booking):
+    if not settings.enable_live_booking:
         return {
             "status": "ready_to_ticket",
             "kind": "flight",
             "selection": selected_flight,
             "message": (
-                "Live ticketing is disabled (requires AMADEUS_ENV=prod and "
-                "ENABLE_LIVE_BOOKING=true). The booking was prepared but NOT issued. "
+                "Live ticketing is disabled (ENABLE_LIVE_BOOKING is not true). "
+                "The booking was prepared but NOT issued. "
                 "Complete ticketing with the airline or agency using this offer."
             ),
         }
@@ -91,14 +91,14 @@ def book_hotel(
         return _confirmation_summary(
             "hotel", selected_hotel, {"guests": guest_details, "payment_method_present": True}
         )
-    if not (settings.amadeus_env == "prod" and settings.enable_live_booking):
+    if not settings.enable_live_booking:
         return {
             "status": "ready_to_ticket",
             "kind": "hotel",
             "selection": selected_hotel,
             "message": (
-                "Live booking is disabled (requires AMADEUS_ENV=prod and "
-                "ENABLE_LIVE_BOOKING=true). The reservation was prepared but NOT made. "
+                "Live booking is disabled (ENABLE_LIVE_BOOKING is not true). "
+                "The reservation was prepared but NOT made. "
                 "Complete it with the hotel or booking platform using these details."
             ),
         }

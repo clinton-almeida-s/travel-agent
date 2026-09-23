@@ -21,8 +21,8 @@ availability — if live data is unavailable, that section is labeled
                     ▼           ▼            ▼
               ┌──────────┐ ┌────────┐ ┌────────────┐
               │ Flights  │ │ Hotels │ │ Activities │
-              │ Amadeus  │ │Amadeus │ │ Wikipedia  │
-              │  test ✓  │ │ test ✓ │ │  +OTM opt. │
+              │  Duffel  │ │LiteAPI │ │ Wikipedia  │
+              │  test ✓  │ │ sand ✓ │ │  +OTM opt. │
               └──────────┘ └────────┘ └────────────┘
                     ▼           ▼
               ┌──────────┐ ┌────────────┐  ┌──────────┐
@@ -33,9 +33,11 @@ availability — if live data is unavailable, that section is labeled
 
 - **LLM backends** (`llm.py`): Gemini via `google-genai`, Groq via `groq` SDK —
   both with function calling, behind one `chat(messages, tools)` interface.
-- **Flights** (`tools/flights.py`): Amadeus Flight Offers Search v2 + re-pricing
-  via Flight Offers Price. Test environment by default (`AMADEUS_ENV=test`).
-- **Hotels** (`tools/hotels.py`): Amadeus Hotel Search v3 (geocode → hotel list → offers).
+- **Flights** (`tools/flights.py`): Duffel Offer Requests API via `requests`
+  (no SDK). Test keys (`duffel_test_…`) return illustrative test inventory —
+  structurally real, not live market pricing.
+- **Hotels** (`tools/hotels.py`): LiteAPI — geocode → `GET /data/hotels` →
+  `POST /hotels/rates`. Sandbox key, free, no card.
 - **Activities** (`tools/activities.py`): Wikipedia geosearch (no key) as primary
   POI source, OpenTripMap as optional enhancement.
 - **Weather** (`tools/weather.py`): OpenWeather 5-day forecast (free tier).
@@ -43,7 +45,7 @@ availability — if live data is unavailable, that section is labeled
   in-memory cache.
 - **Booking guardrails** (`tools/booking.py`): `book_flight`/`book_hotel` require
   `confirmed=true`; without it they return a confirmation summary and **do not book**.
-  Live ticketing additionally requires `AMADEUS_ENV=prod` + `ENABLE_LIVE_BOOKING=true`.
+  Live ticketing additionally requires `ENABLE_LIVE_BOOKING=true`.
 
 ## Setup
 
@@ -62,7 +64,8 @@ python -m travel_agent
 |---|---|---|
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey | Generous free quota |
 | `GROQ_API_KEY` | https://console.groq.com/keys | Free tier, tool-calling models |
-| `AMADEUS_CLIENT_ID` / `AMADEUS_CLIENT_SECRET` | https://developers.amadeus.com/register | Test API free, no card |
+| `DUFFEL_API_KEY` | https://duffel.com (dashboard → test API key) | Free test mode, no card |
+| `LITEAPI_API_KEY` | https://dashboard.liteapi.travel (Profile → sandbox key) | Free sandbox, no card |
 | `OPENWEATHER_API_KEY` | https://openweathermap.org/api | 1,000 calls/day |
 | `OPENTRIPMAP_API_KEY` | https://opentripmap.io | Free (optional) |
 
@@ -102,9 +105,11 @@ Budget level? … [mid-range]: mid-range
 
 ## Limitations (read this)
 
-- **Free flight APIs are indicative, not Google-Flights-live.** Amadeus test
-  prices are estimates — always verify before booking. The agent says this
-  itself whenever relevant.
+- **Free flight/hotel APIs are illustrative, not Google-Flights-live.** Duffel
+  test mode and the LiteAPI sandbox return realistic-looking test inventory —
+  always verify live pricing before booking. The agent says this itself whenever
+  relevant. (Amadeus's free developer portal was shut down in July 2026, which
+  is why this project uses Duffel + LiteAPI.)
 - OpenWeather free tier only forecasts ~5 days ahead.
 - v1 does **not** issue real tickets or hotel reservations. `book_*` tools
   prepare and confirm, but live ticketing is intentionally not implemented —
@@ -124,8 +129,8 @@ travel_agent/
 ├── schemas.py         8 tool JSON schemas + Gemini/Groq converters
 ├── config.py          .env loading, settings, is_configured()
 └── tools/
-    ├── flights.py     Amadeus Flight Offers Search v2
-    ├── hotels.py      Amadeus Hotel Search v3
+    ├── flights.py     Duffel Offer Requests API (test mode)
+    ├── hotels.py      LiteAPI hotel search (geocode → rates)
     ├── activities.py  Wikipedia geosearch (+ OpenTripMap)
     ├── weather.py     OpenWeather 5-day forecast
     ├── geocode.py     Nominatim (1 req/sec, cached)
