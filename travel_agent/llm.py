@@ -13,6 +13,7 @@ SDK imports are lazy so the package imports without credentials or SDKs.
 from __future__ import annotations
 
 import json
+import time
 
 from .config import settings
 from .schemas import to_gemini_tools, to_groq_tools
@@ -52,6 +53,22 @@ def _function_call_part(name: str, args: dict, thought_signature=None):
         except Exception:
             pass  # older google-genai without the field
     return part
+
+
+def _generate_with_retry(client, model: str, contents: list, config, attempts: int = 3):
+    """Call generate_content, retrying transient 429/503 errors with backoff."""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return client.models.generate_content(model=model, contents=contents, config=config)
+        except Exception as exc:
+            last_exc = exc
+            msg = str(exc)
+            retryable = any(code in msg for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"))
+            if not retryable or attempt == attempts - 1:
+                raise LLMError(f"Gemini request failed: {exc}") from exc
+            time.sleep(2**attempt)
+    raise LLMError(f"Gemini request failed: {last_exc}") from last_exc
 
 
 def _gemini_chat(messages: list[dict], tools: list[dict]) -> dict:
@@ -97,12 +114,7 @@ def _gemini_chat(messages: list[dict], tools: list[dict]) -> dict:
         system_instruction=system_instruction,
         tools=to_gemini_tools(tools),
     )
-    try:
-        response = client.models.generate_content(
-            model=settings.gemini_model, contents=contents, config=config
-        )
-    except Exception as exc:
-        raise LLMError(f"Gemini request failed: {exc}") from exc
+    response = _generate_with_retry(client, settings.gemini_model, contents, config)
 
     text_parts: list[str] = []
     tool_calls: list[dict] = []
