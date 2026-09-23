@@ -39,18 +39,19 @@ def _function_call_part(name: str, args: dict, thought_signature=None):
 
     Thinking-capable Gemini models reject a request when a function call
     replayed from history lacks the thought_signature the model originally
-    returned with it (400 INVALID_ARGUMENT). We capture the signature from
-    each response and send it back here.
+    returned on that part (400 INVALID_ARGUMENT). The signature lives on
+    the Part (not on FunctionCall), so we capture it from the response part
+    and set it back on the rebuilt part here.
     """
     from google.genai import types
 
-    fc = types.FunctionCall(name=name, args=args or {})
+    part = types.Part(function_call=types.FunctionCall(name=name, args=args or {}))
     if thought_signature:
         try:
-            fc.thought_signature = thought_signature
+            part.thought_signature = thought_signature
         except Exception:
             pass  # older google-genai without the field
-    return types.Part(function_call=fc)
+    return part
 
 
 def _gemini_chat(messages: list[dict], tools: list[dict]) -> dict:
@@ -117,7 +118,8 @@ def _gemini_chat(messages: list[dict], tools: list[dict]) -> dict:
                         "id": f"gemini-{fc.name}-{len(tool_calls)}",
                         "name": fc.name,
                         "arguments": args,
-                        "thought_signature": getattr(fc, "thought_signature", None),
+                        # Thought signature lives on the Part, not the FunctionCall.
+                        "thought_signature": getattr(part, "thought_signature", None),
                     }
                 )
     return {
