@@ -1,0 +1,12 @@
+# Core runtime (stdlib + requests only for the base install)
+requests>=2.31.0
+
+# LLM backends (install the one you use)
+google-genai>=1.0.0
+groq>=0.9.0
+
+# Flights + hotels
+amadeus>=7.0.0
+
+# .env loading convenience (config.py also works without it)
+python-dotenv>=1.0.0
